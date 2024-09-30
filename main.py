@@ -75,22 +75,24 @@ def set_windows_proxy(enable, server):
         print(f"Failed to set Windows proxy: {e}")
 
 class ProxyAddon(object):
-    def __init__(self, q, filter_cli_port=None):
-        self.queue = q
+    def __init__(self, result, filter_cli_port=None):
+        self.result = result
         self.filter_cli_port = filter_cli_port
     
     def request(self, flow: http.HTTPFlow) -> None:
         request = flow.request
         client_port = flow.client_conn.peername[1]
+        query = list(request.query.fields)
+        if len(query) > 0:
+            query = [list(query[x]) for x in range(len(query))]
         if self.filter_cli_port is not None and self.filter_cli_port == client_port:
-            msg = f"[Filter] Captured Request: {request.method} {request.url}"
+            self.result['Filter'].append({"method":request.method, "url":request.url, "query":query})
         else :
-            msg = f"Captured Request: {request.method} {request.url}"
-        self.queue.put(msg)
+            self.result['Capture'].append({"method":request.method, "url":request.url, "query":query})
 
 class myMitmproxy():
     def __init__(self):
-        self.queue = Queue()
+        self.capture_result = {"Filter":[], "Capture":[]}
     
     def start_loop(self,loop):
         asyncio.set_event_loop(loop)
@@ -122,16 +124,24 @@ class myMitmproxy():
     async def start_mitmproxy(self):
         options = Options(listen_host=PROXY_HOST, listen_port=PROXY_PORT)
         self.master = DumpMaster(options)
-        self.master.addons.add(ProxyAddon(self.queue))
+        self.master.addons.add(ProxyAddon(self.capture_result))
         ctx.options.flow_detail = 0
         try:
             await self.master.run()
         except Exception as e:
             print(e)
             self.master.shutdown()
-        
-    def print_queue(self):
-        return self.queue.queue
+
+def parsing_yt_url(capture_dict):
+    result = []
+    filter_list = capture_dict['Filter']
+    youtube_url = "https://www.youtube.com/watch?v="
+    for data in filter_list:
+        if "youtube.com/embed/" in data['url']:
+            yt_id = data['url'].split('youtube.com/embed/')[-1].split('/')[0]
+            result.append(youtube_url+yt_id)
+    return result    
+    
 
 def main():
     cert_path = get_mitmproxy_cert_path()
@@ -149,7 +159,8 @@ def main():
         proxy.stop_proxy(loop)
     finally:
         set_windows_proxy(0, '')
-        print(proxy.print_queue())
-    
+        result = parsing_yt_url(proxy.capture_result)
+        print(result)
+
 if __name__ == "__main__":
     main()
